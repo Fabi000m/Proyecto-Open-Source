@@ -1,0 +1,57 @@
+package playercommands;
+
+import com.aionemu.gameserver.utils.chathandlers.ChatCommand;
+import com.aionemu.gameserver.model.gameobjects.player.Player;
+import com.aionemu.gameserver.utils.PacketSendUtility;
+import com.aionemu.gameserver.services.PvpInService;
+import com.aionemu.gameserver.world.World;
+import java.util.Iterator;
+
+public class Pvp extends ChatCommand {
+	public Pvp(){
+		super("pvp");
+	}
+	@Override
+	public void execute(Player player, String... params) {
+		
+		//Si ingreso mas de un parametro le indicamos la sintaxis.
+		if(params.length > 1)
+			onFail(player , null);
+		
+		//Verificamos que cosa escribio como primer parametro.
+		if(params[0].toLowerCase().equals("in")){
+			if(PvpInService.IsPlayerInQueueList(player) || player.isInPvpIn()){
+				PacketSendUtility.sendMessage(player, "Ya esta registrado en el evento PvP.");
+			}
+			else
+			{
+				PvpInService.AddPlayer(player);
+				PacketSendUtility.sendMessage(player, "Se ha registrado para el evento PvP.");
+				Iterator<Player> iter = World.getInstance().getPlayersIterator();
+				while (iter.hasNext()) {
+					PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(),
+					"El jugador " + player.getName() + " de nivel " + String.valueOf(player.getLevel()) + ", busca accion en .pvp in.");
+				}
+											
+			}
+		}
+		else if(params[0].toLowerCase().equals("out")){
+			if(PvpInService.IsPlayerInQueueList(player)){
+				PvpInService.RemovePlayer(player);
+				PacketSendUtility.sendMessage(player, "Ha sido borrado de la lista de espera del evento PvP.");
+			}
+			else
+			{
+				PacketSendUtility.sendMessage(player, "Ud. no estaba en la lista de espera del evento PvP.");
+			}
+		}
+		else
+		{
+			onFail(player , null);
+		}
+	}
+	@Override
+	public void onFail(Player player, String message) {
+		PacketSendUtility.sendMessage(player, "Syntax: .pvp in o .pvp out");
+	}
+}
