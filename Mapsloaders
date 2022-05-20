@@ -1,0 +1,58 @@
+package com.aionemu.gameserver.controllers;
+
+import com.aionemu.gameserver.model.templates.PvpInMap;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class PvpInMapsHandler {
+	private static List<PvpInMap> PvpInMapsHolder = new ArrayList<PvpInMap>();
+	
+	//El constructor se encarga de cargar los mapas y definir los lugares en que apareceran los jugadores.
+	//Mas adelante, se podrian cargar usando un XML.
+	public PvpInMapsHandler(){
+		//Arena of chaos.
+		PvpInMapsHolder.add(new PvpInMap(300420000, 1365.526f, 1076.9274f, 339.47946f, (byte) 59,
+				1304.6411f, 1078.822f, 339.1856f, (byte) 119));
+		//Empyrean crucible first stage
+		PvpInMapsHolder.add(new PvpInMap(300170000, 531.816f, 1382.632f, 223.52919f, (byte) 109,
+				576.93555f, 1347.8549f, 223.52919f, (byte) 119));
+		
+		//Asteria Chamber 
+		PvpInMapsHolder.add(new PvpInMap(300050000, 522.13684f, 425.80844f, 199.75935f, (byte) 29,
+				524.5891f, 701.78955f, 191.8985f, (byte) 89));
+		
+		//Crucible challenge: Last stage
+		PvpInMapsHolder.add(new PvpInMap(300320000, 1787.263f, 1274.5676f, 389.11725f, (byte) 52,
+				1742.4197f, 1293.7715f, 389.11728f, (byte) 112));
+	}
+	
+	//Este metodo indica si hay algun mapa disponible.
+	public boolean AnyMapAvaliable(){
+		for(PvpInMap map : PvpInMapsHolder){
+			if(map.IsAvaliable())
+				return true;
+		}
+		return false;
+	}
+		
+	//Este metodo retorna un mapa disponible.
+	public PvpInMap getAvaliableMap(){
+		for(PvpInMap map : PvpInMapsHolder){
+			if(map.IsAvaliable())
+				return map;
+		}
+		return null;
+	}
+	
+	public static PvpInMap getMapById(int id){
+		for(PvpInMap map : PvpInMapsHolder){
+			if(map.getWorldId() == id)
+			return map;
+		}
+		return null;
+	}
+	public static PvpInMap getMapByPosition(int position){
+		return PvpInMapsHolder.get(position);
+	}
+}
