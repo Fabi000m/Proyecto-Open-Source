@@ -1,0 +1,521 @@
+package com.aionemu.gameserver.services;
+
+import com.aionemu.gameserver.model.gameobjects.player.Player;
+import com.aionemu.gameserver.utils.ThreadPoolManager;
+import com.aionemu.gameserver.network.aion.serverpackets.SM_SKILL_COOLDOWN;
+import com.aionemu.gameserver.utils.PacketSendUtility;
+import com.aionemu.gameserver.controllers.PvpInMapsHandler;
+import com.aionemu.gameserver.model.templates.PvpInMap;
+import com.aionemu.gameserver.model.TempLocation;
+import com.aionemu.gameserver.model.DuelResult;
+import java.util.concurrent.ConcurrentHashMap;
+import javolution.util.FastMap;
+import java.util.Random;
+import java.util.ConcurrentModificationException;
+import com.aionemu.gameserver.network.aion.serverpackets.SM_MOTION;
+import com.aionemu.gameserver.network.aion.serverpackets.SM_PLAYER_INFO;
+import com.aionemu.gameserver.network.aion.serverpackets.SM_DUEL;
+import com.aionemu.gameserver.services.instance.InstanceService;
+import com.aionemu.gameserver.services.teleport.TeleportService2;
+import com.aionemu.gameserver.world.WorldMapInstance;
+import com.aionemu.gameserver.skillengine.model.SkillTargetSlot;
+import com.aionemu.gameserver.model.gameobjects.Creature;
+import com.aionemu.gameserver.model.gameobjects.VisibleObject;
+import com.aionemu.gameserver.network.aion.serverpackets.SM_ATTACK_STATUS.TYPE;
+import com.aionemu.gameserver.model.stats.container.CreatureLifeStats;
+import com.aionemu.gameserver.world.World;
+import com.aionemu.gameserver.controllers.effect.EffectController;
+import com.aionemu.gameserver.services.abyss.AbyssPointsService;
+//-------
+import java.util.Iterator;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map.Entry;
+import java.util.Iterator;
+import java.util.Enumeration;
+
+/**
+*
+* @author Fabian (previously known as whoKnow)
+* 
+*/
+
+public class PvpInService {
+	
+	private static List<Player> QueueList = Collections.synchronizedList(new ArrayList<Player>());
+	private static PvpInMapsHandler PvpMapsHandler = new PvpInMapsHandler();
+	private static FastMap<Player, TempLocation> OldPlayerLocations = new FastMap<Player,TempLocation>().shared();
+	private static FastMap<Player, Player> ListOfDuels1 = new FastMap<Player, Player>().shared();
+	private static FastMap<Player, Player> ListOfDuels2 = new FastMap<Player, Player>().shared();
+	private static FastMap<Player, Long> TimesOfMatchs1 = new FastMap<Player, Long>().shared();
+	private static FastMap<Player, Long> TimesOfMatchs2 = new FastMap<Player, Long>().shared();
+	
+	public static PvpInService getPvpInServer(){
+		return SingletonHolder.instance;
+	}
+	
+	private PvpInService(){
+		ThreadPoolManager.getInstance().scheduleAtFixedRate(new Runnable() {
+			@Override
+			public void run() {
+				//aux usado para eliminar a un jugador de la lista de espera.
+				int aux = 0;
+				//Verificamos que hayan al menos 2 jugadores en la lista de espera y que haya un mapa habilitado.
+				synchronized(QueueList){
+					if(QueueList.size()>1){
+						//Comprobamos el nivel de los jugadores.
+						try{
+							for(Player pp : QueueList){
+								if(PvpMapsHandler.AnyMapAvaliable()){
+									for(int i = 0; i < QueueList.size() ; i++){
+										//Si realizamos una comparacion con otro jugador.
+										if(pp.getObjectId() != QueueList.get(i).getObjectId()){
+											//Verificamos que la diferencia de niveles no sea mayor a 5.
+											if(pp.getLevel() >= (QueueList.get(i).getLevel() - 5) && pp.getLevel() <= (QueueList.get(i).getLevel() + 5)){
+												//Ahora tenemos a los dos jugadores.
+										
+												Random generator = new Random();
+												switch(generator.nextInt(3)){
+												case 0:
+													Iterator<Player> iter = World.getInstance().getPlayersIterator();
+													while (iter.hasNext()) {
+														PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(),
+														"Los jugadores que van a morir los saludan: " + pp.getName() + " Vs. " + QueueList.get(i).getName());
+													}
+													break;
+												case 1:
+													Iterator<Player> iter2 = World.getInstance().getPlayersIterator();
+													while (iter2.hasNext()) {
+														PacketSendUtility.sendBrightYellowMessageOnCenter(iter2.next(),
+														"La siguiente batalla sera entre....! " + pp.getName() + " Vs. " + QueueList.get(i).getName());
+													}
+													break;
+												case 2:
+													Iterator<Player> iter3 = World.getInstance().getPlayersIterator();
+													while (iter3.hasNext()) {
+														PacketSendUtility.sendBrightYellowMessageOnCenter(iter3.next(),
+														pp.getName() + " y " + QueueList.get(i).getName() + " se preparan para una batalla a muerte en la arena.");
+													}
+													break;
+												}
+										
+										
+												//Inicialmente, se hara un restart de sus cooldowns.
+												//Jugador pp primero.
+												List<Integer> delayIds = new ArrayList<Integer>();
+												if (pp.getSkillCoolDowns() != null) {
+													long currentTime = System.currentTimeMillis();
+													for (Entry<Integer, Long> en : pp.getSkillCoolDowns().entrySet())
+														delayIds.add(en.getKey());
+	
+													for (Integer delayId : delayIds)
+														pp.setSkillCoolDown(delayId, currentTime);
+	
+													delayIds.clear();
+													PacketSendUtility.sendPacket(pp, new SM_SKILL_COOLDOWN(pp.getSkillCoolDowns()));
+												}
+											
+												//Jugador en QueueList[i]
+												List<Integer> delayIds2 = new ArrayList<Integer>();
+												if (QueueList.get(i).getSkillCoolDowns() != null) {
+													long currentTime = System.currentTimeMillis();
+													for (Entry<Integer, Long> en : QueueList.get(i).getSkillCoolDowns().entrySet())
+														delayIds2.add(en.getKey());
+
+													for (Integer delayId : delayIds2)
+															QueueList.get(i).setSkillCoolDown(delayId, currentTime);
+
+													delayIds2.clear();
+													PacketSendUtility.sendPacket(QueueList.get(i), new SM_SKILL_COOLDOWN(QueueList.get(i).getSkillCoolDowns()));
+												}
+
+												//Curamos a ambos jugadores.
+												pp.getLifeStats().increaseHp(TYPE.HP, pp.getLifeStats().getMaxHp() + 1);
+												pp.getLifeStats().increaseMp(TYPE.MP, pp.getLifeStats().getMaxMp() + 1);
+												pp.getEffectController().removeAbnormalEffectsByTargetSlot(SkillTargetSlot.SPEC2);
+										
+												QueueList.get(i).getLifeStats().increaseHp(TYPE.HP, QueueList.get(i).getLifeStats().getMaxHp() + 1);
+												QueueList.get(i).getLifeStats().increaseMp(TYPE.MP, QueueList.get(i).getLifeStats().getMaxMp() + 1);
+												QueueList.get(i).getEffectController().removeAbnormalEffectsByTargetSlot(SkillTargetSlot.SPEC2);
+									
+												//Antes de teletransportar a los jugadores, guardamos el lugar en el que estaban.
+												//Ojo que getInstanceId puede retornar null.
+									
+												OldPlayerLocations.put(pp, new TempLocation(pp.getWorldId(), pp.getInstanceId(), 
+														pp.getX(), pp.getY(), pp.getZ()));
+										
+												OldPlayerLocations.put(QueueList.get(i), new TempLocation(QueueList.get(i).getWorldId(), QueueList.get(i).getInstanceId(), 
+														QueueList.get(i).getX(),QueueList.get(i).getY(), QueueList.get(i).getZ()));
+											
+												//Tambien asociamos ambos jugadores en ListOfDuels y con el mapa que les toco.
+												ListOfDuels1.put(pp, QueueList.get(i));
+												ListOfDuels1.put(QueueList.get(i), pp);
+										
+												
+									
+												//Ahora teletransportamos a ambos jugadores a una arena.
+												PvpInMap PvpMap = PvpInMapsHandler.getMapByPosition(generator.nextInt(4));
+												int aux1 = 1;
+												for(;!PvpMap.IsAvaliable() && aux<4 ;aux++){
+													PvpMap = PvpInMapsHandler.getMapByPosition(generator.nextInt(4));
+													aux1++;
+												}
+												//<map id="300300000" name="Empyrean Crucible"
+											
+												PvpMap.setAvaliable(false);
+										
+												//Heading 59
+												TeleportService2.teleportTo(pp, PvpMap.getWorldId(),PvpMap.getXp1(), 
+														PvpMap.getYp1(), PvpMap.getZp1(), PvpMap.getHp1());
+									
+												//Heading 119
+												TeleportService2.teleportTo(QueueList.get(i), PvpMap.getWorldId(), 
+														PvpMap.getXp2(), PvpMap.getYp2(), PvpMap.getZp2(), PvpMap.getHp2());
+									
+												//Ahora se deberian setear en modo duel a ambos.
+												pp.setInPvpIn(true);
+												QueueList.get(i).setInPvpIn(true);
+												
+												PacketSendUtility.sendPacket(pp, SM_DUEL.SM_DUEL_STARTED(QueueList.get(i).getObjectId()));
+												PacketSendUtility.sendPacket(QueueList.get(i), SM_DUEL.SM_DUEL_STARTED(pp.getObjectId()));
+										
+												//Hacemos que se vean como enemigos.
+												pp.setAdminEnmity(2);
+												QueueList.get(i).setAdminEnmity(2);
+										
+												pp.clearKnownlist();
+												PacketSendUtility.sendPacket(pp, new SM_PLAYER_INFO(pp, false));
+												PacketSendUtility.sendPacket(pp, new SM_MOTION(pp.getObjectId(), pp.getMotions().getActiveMotions()));
+												pp.updateKnownlist();
+										
+												QueueList.get(i).clearKnownlist();
+												PacketSendUtility.sendPacket(QueueList.get(i), new SM_PLAYER_INFO(QueueList.get(i), false));
+												PacketSendUtility.sendPacket(QueueList.get(i), new SM_MOTION(QueueList.get(i).getObjectId(), QueueList.get(i).getMotions().getActiveMotions()));
+												QueueList.get(i).updateKnownlist();
+										
+												//Aqui inicializa el contador de tiempo para determinar un mensaje a mostrar.
+										
+												TimesOfMatchs1.put(pp, System.currentTimeMillis());
+												TimesOfMatchs2.put(QueueList.get(i), System.currentTimeMillis());
+												
+												//Removemos a los dos jugadores de la lista de espera.
+												QueueList.remove(i);
+												QueueList.remove(aux);
+												break;
+											}
+										}
+									}
+									aux++;
+								}
+								else
+								{
+									break;
+								}
+							}
+						}
+						//Se esta lanzando una excepcion que no deberian lanzarse.
+						//Para mas informacion leer los documentos oficiales sobre la clase List. 
+						catch(ConcurrentModificationException e)
+						{
+						
+						}
+					
+					}
+				}
+			}
+		}, 30000, 15000);
+	}
+	
+	//Method used to add player in the QueueList.
+	//Creo que no se esta usando.
+	public static synchronized void AddPlayer(Player p){
+		QueueList.add(p);
+	}
+	
+	//Method used to remove a player from the QueueList.
+	public static synchronized void RemovePlayer(Player p){
+		int aux = 0;
+		for(Player pp : QueueList){
+			if(pp.getObjectId() == p.getObjectId()){
+				QueueList.remove(aux);
+				break;
+			}
+			aux++;	
+		}
+	}
+	
+	public static synchronized void setLooser(Player pp){
+			
+			Player p = null;
+			if(ListOfDuels1.get(pp) == null){		
+				 p = ListOfDuels2.get(pp);
+			}
+			else
+			{
+				 p = ListOfDuels1.get(pp);
+			}
+			//Indicamos quienes ganaron. No al server.
+			PacketSendUtility.sendPacket(p, SM_DUEL.SM_DUEL_RESULT(DuelResult.DUEL_WON, p.getName()));
+			PacketSendUtility.sendPacket(pp, SM_DUEL.SM_DUEL_RESULT(DuelResult.DUEL_LOST, pp.getName()));
+			
+			p.getLifeStats().increaseHp(TYPE.HP, p.getLifeStats().getMaxHp() + 1);
+			p.getLifeStats().increaseMp(TYPE.MP, p.getLifeStats().getMaxMp() + 1);
+			p.getEffectController().removeAbnormalEffectsByTargetSlot(SkillTargetSlot.SPEC2);
+			
+			pp.getLifeStats().increaseHp(TYPE.HP, pp.getLifeStats().getMaxHp() + 1);
+			pp.getLifeStats().increaseMp(TYPE.MP, pp.getLifeStats().getMaxMp() + 1);
+			pp.getEffectController().removeAbnormalEffectsByTargetSlot(SkillTargetSlot.SPEC2);
+			
+			//Determinamos el mensaje a mostrarle a los demas jugadores en base a cuanto se demoro en ganar el ganador.
+			//REQUIERE MUCHA OPTIMIZATION/REQUIERE A LOT OF OPTIMIZACION ! IM AWARE OF THAT! BUT I WAS LAZY!
+			long TimeHolder = 0;
+			if(TimesOfMatchs1.get(pp) == null){		
+				 TimeHolder = System.currentTimeMillis() - TimesOfMatchs2.get(pp);
+			}
+			else
+			{
+				 TimeHolder = System.currentTimeMillis() - TimesOfMatchs1.get(pp);
+			}
+			//Mensajes menos 5 segundos.
+			if( TimeHolder <= 5000 ){
+				Iterator<Player> iter = World.getInstance().getPlayersIterator();
+				while (iter.hasNext()) {
+					PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(), 
+							"El jugador " + p.getName() + ", ha destrozado brutalmente a " + pp.getName());
+				}
+			}
+			//Mensajes menos 5 segundos.
+			if(TimeHolder > 5000 && TimeHolder <= 10000){
+				Iterator<Player> iter = World.getInstance().getPlayersIterator();
+				while (iter.hasNext()) {
+					PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(), 
+							p.getName() + " derroto a " + pp.getName() + " por FATALITY!");
+				}
+			}
+			//Mensajes menos 5 segundos.
+			if(TimeHolder > 10000 && TimeHolder <= 20000){
+				Iterator<Player> iter = World.getInstance().getPlayersIterator();
+				while (iter.hasNext()) {
+					PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(), 
+							"El jugador " + p.getName() + ", ha aniquilado a " + pp.getName());
+				}
+			}
+			//Mensajes menos 5 segundos.
+			if(TimeHolder > 20000 && TimeHolder <= 40000){
+				Iterator<Player> iter = World.getInstance().getPlayersIterator();
+				while (iter.hasNext()) {
+					PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(), 
+							p.getName() + " masacro a " + pp.getName());
+				}
+			}
+			//Mensajes menos 5 segundos.
+			if(TimeHolder > 40000 && TimeHolder <= 80000){
+				Iterator<Player> iter = World.getInstance().getPlayersIterator();
+				while (iter.hasNext()) {
+					PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(), 
+							"El jugador " + p.getName() + ", vencio honrosamente a " + pp.getName());
+				}
+			}
+			//Mensajes menos 5 segundos.
+			if(TimeHolder > 80000 && TimeHolder <= 160000){
+				Iterator<Player> iter = World.getInstance().getPlayersIterator();
+				while (iter.hasNext()) {
+					PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(), 
+							"El daeva " + p.getName() + ", vencio de forma decente a " + pp.getName());
+				}
+			}
+			//Mensajes menos 5 segundos.
+			if(TimeHolder > 160000){
+				Iterator<Player> iter = World.getInstance().getPlayersIterator();
+				while (iter.hasNext()) {
+					PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(), 
+							"El jugador : " + p.getName() + ", ha derrotado a " + pp.getName());
+				}
+			}
+			//Borramos los contadores de tiempo.
+			TimesOfMatchs1.remove(pp);
+			TimesOfMatchs2.remove(p);
+			
+			
+			//Ahora dejamos habilitado el mapa que usaron.
+			PvpInMapsHandler.getMapById(p.getWorldId()).setAvaliable(true);
+			
+			//Dejamos estos en falso para evitar que se llame setlooser for leave desde onleavezone.
+			p.setInPvpIn(false);
+			pp.setInPvpIn(false);
+			
+			//Antes de teletransportarlos los dejamos con enmity neutral.
+			p.setAdminEnmity(0);
+			pp.setAdminEnmity(0);
+			
+			p.clearKnownlist();
+			PacketSendUtility.sendPacket(p, new SM_PLAYER_INFO(p, false));
+			PacketSendUtility.sendPacket(p, new SM_MOTION(p.getObjectId(), p.getMotions().getActiveMotions()));
+			p.updateKnownlist();
+										
+			pp.clearKnownlist();
+			PacketSendUtility.sendPacket(pp, new SM_PLAYER_INFO(pp, false));
+			PacketSendUtility.sendPacket(pp, new SM_MOTION(pp.getObjectId(), pp.getMotions().getActiveMotions()));
+			pp.updateKnownlist();
+			
+			//Por ultimo, transportamos a ambos jugadores a donde estaban.
+			TeleportService2.teleportTo(p, OldPlayerLocations.get(p).getWorldId(),OldPlayerLocations.get(p).getX(), 
+					OldPlayerLocations.get(p).getY(), OldPlayerLocations.get(p).getZ());
+			
+			TeleportService2.teleportTo(pp, OldPlayerLocations.get(pp).getWorldId(),OldPlayerLocations.get(pp).getX(), 
+					OldPlayerLocations.get(pp).getY(), OldPlayerLocations.get(pp).getZ());
+			
+			//Ahora le damos AP al jugador ganador.
+			AbyssPointsService.addAp(p, 700);
+			//Ahora le quitamos al perdedor.
+			AbyssPointsService.addAp(pp, -350);
+			
+			//Ahora los sacamos de todas las listas almacenadoras xD.
+			OldPlayerLocations.remove(p);
+			OldPlayerLocations.remove(pp);
+			
+			//Requiere optimizacion.
+			//Requiere optimization.
+			if(ListOfDuels1.get(pp) == null){		
+				ListOfDuels2.remove(pp);
+			}
+			else
+			{
+				ListOfDuels1.remove(pp);
+			}
+			
+			if(ListOfDuels1.get(p) == null){		
+				ListOfDuels2.remove(p);
+			}
+			else
+			{
+				ListOfDuels1.remove(p);
+			}
+			
+		
+	}
+	public static synchronized void setLooserForLeave(Player pp){
+			
+			Player p = null;
+			if(ListOfDuels1.get(pp) == null){		
+				 p = ListOfDuels2.get(pp);
+			}
+			else
+			{
+				 p = ListOfDuels1.get(pp);
+			}
+			p.setInPvpIn(false);
+			pp.setInPvpIn(false);
+			PacketSendUtility.sendPacket(p, SM_DUEL.SM_DUEL_RESULT(DuelResult.DUEL_WON, p.getName()));
+			PacketSendUtility.sendPacket(pp, SM_DUEL.SM_DUEL_RESULT(DuelResult.DUEL_LOST, pp.getName()));
+		
+			//Curamos solo al jugador que estaba en el PvpIn.
+			p.getLifeStats().increaseHp(TYPE.HP, p.getLifeStats().getMaxHp() + 1);
+			p.getLifeStats().increaseMp(TYPE.MP, p.getLifeStats().getMaxMp() + 1);
+			p.getEffectController().removeAbnormalEffectsByTargetSlot(SkillTargetSlot.SPEC2);
+		
+			//Le anunciamos al mundo.
+			Iterator<Player> iter = World.getInstance().getPlayersIterator();
+			while (iter.hasNext()) {
+				PacketSendUtility.sendBrightYellowMessageOnCenter(iter.next(), 
+						"El jugador : " + pp.getName() +  ", ha escapado cobardemente de " + p.getName());
+			}
+			
+			//Dejamos habilitado el mapa que usaron.
+			PvpInMapsHandler.getMapById(p.getWorldId()).setAvaliable(true);
+			
+			
+			//Limpiamos los contadores que usaron.
+			TimesOfMatchs1.remove(pp);
+			TimesOfMatchs2.remove(p);
+			
+			p.setAdminEnmity(0);
+			pp.setAdminEnmity(0);
+			
+			p.clearKnownlist();
+			PacketSendUtility.sendPacket(p, new SM_PLAYER_INFO(p, false));
+			PacketSendUtility.sendPacket(p, new SM_MOTION(p.getObjectId(), p.getMotions().getActiveMotions()));
+			p.updateKnownlist();
+										
+			pp.clearKnownlist();
+			PacketSendUtility.sendPacket(pp, new SM_PLAYER_INFO(pp, false));
+			PacketSendUtility.sendPacket(pp, new SM_MOTION(pp.getObjectId(), pp.getMotions().getActiveMotions()));
+			pp.updateKnownlist();
+		
+			//Transportamos solo al jugador que quedo en la instancea.
+			TeleportService2.teleportTo(p, OldPlayerLocations.get(p).getWorldId(),OldPlayerLocations.get(p).getX(), 
+					OldPlayerLocations.get(p).getY(), OldPlayerLocations.get(p).getZ());
+			
+			//Le damos AP al jugador ganador.
+			AbyssPointsService.addAp(p, 700);
+			//Y le quitamos al perdedor.
+			AbyssPointsService.addAp(pp, -350);
+			
+			//Ahora los sacamos de las listas almacenadoras.
+			OldPlayerLocations.remove(p);
+			OldPlayerLocations.remove(pp);
+			
+			//Requiere optimizacion.
+			if(ListOfDuels1.get(pp) == null){		
+				ListOfDuels2.remove(pp);
+			}
+			else
+			{
+				ListOfDuels1.remove(pp);
+			}
+			
+			if(ListOfDuels1.get(p) == null){		
+				ListOfDuels2.remove(p);
+			}
+			else
+			{
+				ListOfDuels1.remove(p);
+			}
+			
+			
+	}
+	
+	private static boolean IsPlayerInPvpInMap(Player p){
+		//Requiere optimizacion.
+		//Requiere optimization.
+		int aux = p.getWorldId();
+		if(aux  == 300420000 || aux  == 300300000 || aux  == 300050000 || aux  == 300032000){
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+	
+	//Este metodo se usa para evitar que se buguee el pvp in. El bug consiste en que varios jugadores pueden entrar al mismo mapa(2+ jugadores). 
+	//This method is used to avoid a very weird bug in wich many players can get inside an specific unavailable map(2+ players).
+	public static void CleanPvpServiceFromPlayer(Player p){
+		if(IsPlayerInQueueList(p)){
+			QueueList.remove(p);
+		}
+		//Requiere optimizacion.
+		//Requiere optimization :p
+		if(OldPlayerLocations.get(p)!=null)
+			OldPlayerLocations.remove(p);
+		if(ListOfDuels1.get(p)!=null)
+			ListOfDuels1.remove(p);
+		if(ListOfDuels2.get(p)!=null)
+			ListOfDuels2.remove(p);
+		if(TimesOfMatchs1.get(p)!=null)
+			TimesOfMatchs1.remove(p);
+		if(TimesOfMatchs2.get(p)!=null)
+			TimesOfMatchs2.remove(p);
+	}
+	
+	public static boolean IsPlayerInQueueList(Player p){
+		return QueueList.contains(p);
+	}
+	
+	@SuppressWarnings("synthetic-access")
+	private static class SingletonHolder {
+
+		protected static final PvpInService instance = new PvpInService();
+	}
+}
